@@ -1,0 +1,6 @@
+{
+  "name": "DINÂMICO PRO",
+  "description": "Plataforma profissional de geração de plaquinhas NFC e QR Codes dinâmicos com painel administrativo e aprovação de compradores.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

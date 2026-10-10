@@ -1,0 +1,128 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'jeannmkt2@gmail.com' ||
+        request.auth.token.email == 'biofacilsistema@gmail.com'
+      );
+    }
+
+    function isApprovedUser(userId) {
+      return isAdmin() || (
+        exists(/databases/$(database)/documents/users/$(userId)) &&
+        get(/databases/$(database)/documents/users/$(userId)).data.status == 'approved'
+      );
+    }
+
+    // System connectivity health check
+    match /system_test/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Admins registry
+    match /admins/{adminId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin() || (
+        isSignedIn() &&
+        (request.auth.token.email == 'jeannmkt2@gmail.com' || request.auth.token.email == 'biofacilsistema@gmail.com') &&
+        adminId == request.auth.uid
+      );
+    }
+
+    // User profiles & approvals
+    match /users/{userId} {
+      // Owner can get their profile; Admins can get any profile and list all users
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      // On create: Admins can create anything; new users must have status 'pending'
+      allow create: if isOwner(userId) && (
+        isAdmin() || (
+          incoming().uid == request.auth.uid &&
+          incoming().status == 'pending'
+        )
+      );
+
+      // On update: Admins can change status to approved/blocked; owners can only update non-privilege fields
+      allow update: if isAdmin() || (
+        isOwner(userId) &&
+        incoming().uid == existing().uid &&
+        incoming().status == existing().status &&
+        incoming().role == existing().role
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // Buyer batches subcollection
+    match /users/{userId}/batches/{batchId} {
+      allow read, get, list: if isOwner(userId) || isAdmin();
+      allow create, update, delete: if (isOwner(userId) && isApprovedUser(userId)) || isAdmin();
+    }
+
+    // Buyer plaques subcollection
+    match /users/{userId}/plaques/{plaqueId} {
+      allow read, get, list: if isOwner(userId) || isAdmin();
+      allow create, update, delete: if (isOwner(userId) && isApprovedUser(userId)) || isAdmin();
+    }
+
+    // Dynamic QR Redirects (public lookup for visitors, managed by owner)
+    match /redirects/{publicId} {
+      // Public visitors scanning QR codes need get access to read the destination URL
+      allow get: if true;
+      allow list: if isAdmin();
+
+      // Creating redirect requires approved user who owns the redirect or admin
+      allow create: if isSignedIn() && (
+        isAdmin() || (
+          isApprovedUser(request.auth.uid) &&
+          incoming().ownerUid == request.auth.uid
+        )
+      );
+
+      // Updating destination requires owner or admin.
+      // Clicks counter can be incremented anonymously when visitor accesses redirect
+      allow update: if (
+        isAdmin() ||
+        (isSignedIn() && existing().ownerUid == request.auth.uid && isApprovedUser(request.auth.uid)) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['clicks', 'lastClickAt']))
+      );
+
+      allow delete: if (isSignedIn() && existing().ownerUid == request.auth.uid) || isAdmin();
+    }
+
+    // Audit logs for admin actions
+    match /adminAudit/{auditId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
